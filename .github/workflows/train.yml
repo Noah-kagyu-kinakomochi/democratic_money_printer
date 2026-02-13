@@ -32,11 +32,6 @@ jobs:
         run: |
           pip install databricks-cli
 
-      - name: Update Databricks Repo
-        run: |
-          echo "Updating Databricks Repo at $REPO_PATH..."
-          databricks repos update --path "$REPO_PATH" --branch "main"
-
       - name: Deploy and Run Job
         run: |
           JOB_NAME="MoneyPrinter_Production_Train"
