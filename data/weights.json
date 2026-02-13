@@ -1,0 +1,80 @@
+{
+  "timestamp": "2026-02-13T10:51:35.641606+00:00",
+  "model_count": 12,
+  "weights": {
+    "MA_1Min": 0.05558530633397157,
+    "MA_1Day": 0.10038683817653336,
+    "RSI_1Min": 0.05642155942155959,
+    "RSI_1Day": 0.12442169170145749,
+    "MACD_1Min": 0.05352243888170555,
+    "MACD_1Day": 0.13760429526257661,
+    "AutoReg_1Min": 0.04408056903288982,
+    "AutoReg_1Day": 0.040605903051115486,
+    "CorrRegime_1Min": 0.054127283486204505,
+    "CorrRegime_1Day": 0.2012403220196662,
+    "Sentiment_1Min": 0.06384596038137019,
+    "Sentiment_1Day": 0.06815783225094965
+  },
+  "scores": {
+    "MA_1Min": {
+      "training_score": 0.1439952712058995,
+      "alpha": -0.3548826950800789,
+      "sharpe_ratio": -1.1200000591561243
+    },
+    "MA_1Day": {
+      "training_score": 0.8520292721662646,
+      "alpha": 0.00666971641831295,
+      "sharpe_ratio": 0.09832675960309338
+    },
+    "RSI_1Min": {
+      "training_score": 0.17025833646002905,
+      "alpha": -0.22795596375533758,
+      "sharpe_ratio": -0.6329626033683894
+    },
+    "RSI_1Day": {
+      "training_score": 0.9596972874694427,
+      "alpha": 0.028849184520010025,
+      "sharpe_ratio": 0.9559774731837338
+    },
+    "MACD_1Min": {
+      "training_score": 0.10199809283265081,
+      "alpha": -0.5652683663647008,
+      "sharpe_ratio": -2.025380062950351
+    },
+    "MACD_1Day": {
+      "training_score": 0.7499713757074403,
+      "alpha": 0.02763897218146962,
+      "sharpe_ratio": -0.5391474362727501
+    },
+    "AutoReg_1Min": {
+      "training_score": 0.12004305062337293,
+      "alpha": -0.4729127280215641,
+      "sharpe_ratio": -1.8578135995064118
+    },
+    "AutoReg_1Day": {
+      "training_score": 0.0,
+      "alpha": 0.0,
+      "sharpe_ratio": 0.0
+    },
+    "CorrRegime_1Min": {
+      "training_score": 0.03861997219928265,
+      "alpha": -0.8822459856840724,
+      "sharpe_ratio": -4.737761945981968
+    },
+    "CorrRegime_1Day": {
+      "training_score": 0.9138429684834523,
+      "alpha": 0.051516277139855716,
+      "sharpe_ratio": -0.41819939157159536
+    },
+    "Sentiment_1Min": {
+      "training_score": 0.20591462498692284,
+      "alpha": -0.07548346179220622,
+      "sharpe_ratio": -0.017934460433173007
+    },
+    "Sentiment_1Day": {
+      "training_score": 0.4882724825933991,
+      "alpha": -0.08391417410763141,
+      "sharpe_ratio": -0.4266625198156184
+    }
+  }
+}

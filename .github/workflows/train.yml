@@ -1,0 +1,66 @@
+name: Train Model on Databricks
+
+on:
+  push:
+    paths:
+      - 'strategy/**'
+      - 'jobs/**'
+      - 'training_bundle/**'
+    branches:
+      - main
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      JOB_ID: ${{ secrets.DATABRICKS_TRAIN_JOB_ID }}
+      # Assuming repo path in Databricks Workspace
+      REPO_PATH: /Repos/Production/MoneyPrinter
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Databricks CLI
+        run: |
+          pip install databricks-cli
+
+      - name: Update Databricks Repo
+        run: |
+          echo "Updating Databricks Repo at $REPO_PATH..."
+          databricks repos update --path "$REPO_PATH" --branch "main"
+
+      - name: Deploy and Run Job
+        run: |
+          JOB_NAME="MoneyPrinter_Production_Train"
+          CONFIG_FILE="jobs/job_config.json"
+          
+          echo "Checking for existing job: $JOB_NAME"
+          # List jobs and grep for ID (requires databricks-cli setup)
+          # Note: 'databricks jobs list' output format varies. Using json output for parsing.
+          # We need jq installed (ubuntu-latest has it).
+          
+          EXISTING_JOB_ID=$(databricks jobs list --output json | jq -r ".jobs[] | select(.settings.name == \"$JOB_NAME\") | .job_id")
+          
+          if [ -n "$EXISTING_JOB_ID" ] && [ "$EXISTING_JOB_ID" != "null" ]; then
+            echo "Found existing job ID: $EXISTING_JOB_ID. Resetting configuration..."
+            databricks jobs reset --job-id "$EXISTING_JOB_ID" --json-file "$CONFIG_FILE"
+            JOB_ID=$EXISTING_JOB_ID
+          else
+            echo "Job not found. Creating new job..."
+            # Create returns: { "job_id": 123 }
+            JOB_ID=$(databricks jobs create --json-file "$CONFIG_FILE" | jq -r '.job_id')
+            echo "Created new job ID: $JOB_ID"
+          fi
+          
+          echo "Triggering Run for Job ID: $JOB_ID"
+          run_id=$(databricks jobs run-now --job-id "$JOB_ID" --output json | jq -r '.run_id')
+          echo "Run ID: $run_id"
+          echo "Track run at: $DATABRICKS_HOST/?o=0#job/$JOB_ID/run/$run_id"
