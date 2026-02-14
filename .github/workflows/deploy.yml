@@ -38,31 +38,7 @@ jobs:
           if [ -z "$DATABRICKS_HOST" ]; then echo "❌ DATABRICKS_HOST is missing!"; else echo "✅ DATABRICKS_HOST is set"; fi
           if [ -z "$DATABRICKS_TOKEN" ]; then echo "❌ DATABRICKS_TOKEN is missing!"; else echo "✅ DATABRICKS_TOKEN is set"; fi
 
-      - name: Deploy and Run Job
+      - name: Deploy and Run Job (Python)
         run: |
-          JOB_NAME="MoneyPrinter_Production_Train"
-          CONFIG_FILE="jobs/job_config.json"
-          
-          echo "Checking for existing job: $JOB_NAME"
-          
-          # Filter out WARN logs and multi-line garbage. 
-          # 1. 2>/dev/null silences stderr (where warnings usually are).
-          # 2. sed -n '/^{/,$p' extracts from the first line starting with '{' (JSON start) to end.
-          
-          EXISTING_JOB_ID=$(databricks jobs list --output json 2>/dev/null | sed -n '/^{/,$p' | jq -r ".jobs[] | select(.settings.name == \"$JOB_NAME\") | .job_id")
-          
-          if [ -n "$EXISTING_JOB_ID" ] && [ "$EXISTING_JOB_ID" != "null" ]; then
-            echo "Found existing job ID: $EXISTING_JOB_ID. Resetting configuration..."
-            databricks jobs reset --job-id "$EXISTING_JOB_ID" --json-file "$CONFIG_FILE" 2>/dev/null
-            JOB_ID=$EXISTING_JOB_ID
-          else
-            echo "Job not found. Creating new job..."
-            # Create returns: { "job_id": 123 }
-            JOB_ID=$(databricks jobs create --json-file "$CONFIG_FILE" 2>/dev/null | sed -n '/^{/,$p' | jq -r '.job_id')
-            echo "Created new job ID: $JOB_ID"
-          fi
-          
-          echo "Triggering Run for Job ID: $JOB_ID"
-          run_id=$(databricks jobs run-now --job-id "$JOB_ID" --output json 2>/dev/null | sed -n '/^{/,$p' | jq -r '.run_id')
-          echo "Run ID: $run_id"
-          echo "Track run at: $DATABRICKS_HOST/?o=0#job/$JOB_ID/run/$run_id"
+          pip install databricks-cli
+          python jobs/deploy.py
