@@ -8,7 +8,7 @@ targets:
   production:
     mode: production
     workspace:
-      host: ${workspace.host}
+      root_path: /Shared/.bundle/prod/${bundle.name}
 
 resources:
   jobs:
