@@ -127,7 +127,7 @@ def main():
 
     # 5. Run
     print(f"Triggering run for Job ID: {job_id}...")
-    run_output = run_cmd(["databricks", "jobs", "run-now", "--job-id", str(job_id), "--output", "json"])
+    run_output = run_cmd(["databricks", "jobs", "run-now", "--job-id", str(job_id)])
     run_data = parse_json_from_output(run_output)
     
     run_id = run_data.get("run_id") if run_data else "UNKNOWN"
