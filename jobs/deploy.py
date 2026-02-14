@@ -73,7 +73,6 @@ def main():
             {
                 "environment_key": "Default",
                 "spec": {
-                    "client": "1",
                     "dependencies": [
                         "mlflow", "torch", "scikit-learn", "pandas", "numpy", "joblib"
                     ]
