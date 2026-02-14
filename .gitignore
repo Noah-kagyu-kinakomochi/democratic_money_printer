@@ -19,3 +19,4 @@ mlruns/
 .vscode/
 .idea/
 *.swp
+.databricks/
