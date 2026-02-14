@@ -15,9 +15,6 @@ jobs:
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      JOB_ID: ${{ secrets.DATABRICKS_TRAIN_JOB_ID }}
-      # Assuming repo path in Databricks Workspace
-      REPO_PATH: /Repos/Production/MoneyPrinter
 
     steps:
       - name: Checkout code
