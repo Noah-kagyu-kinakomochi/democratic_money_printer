@@ -19,24 +19,24 @@
                     "32"
                 ]
             },
-            "job_cluster_key": "MoneyPrinter_Cluster",
+            "environment_key": "Default",
             "timeout_seconds": 0,
             "email_notifications": {}
         }
     ],
-    "job_clusters": [
+    "environments": [
         {
-            "job_cluster_key": "MoneyPrinter_Cluster",
-            "new_cluster": {
-                "spark_version": "13.3.x-cpu-ml-scala2.12",
-                "spark_conf": {
-                    "spark.master": "local[*, 4]",
-                    "spark.databricks.cluster.profile": "singleNode"
-                },
-                "custom_tags": {
-                    "ResourceClass": "SingleNode"
-                },
-                "num_workers": 0
+            "environment_key": "Default",
+            "spec": {
+                "client": "1",
+                "dependencies": [
+                    "mlflow",
+                    "torch",
+                    "scikit-learn",
+                    "pandas",
+                    "numpy",
+                    "joblib"
+                ]
             }
         }
     ],
