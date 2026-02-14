@@ -29,6 +29,8 @@ jobs:
       - name: Install Databricks CLI
         run: |
           pip install databricks-cli
+          # Suppress API 2.0 warnings
+          databricks jobs configure --version=2.1
 
       - name: Debug Environment
         run: |
@@ -42,11 +44,9 @@ jobs:
           CONFIG_FILE="jobs/job_config.json"
           
           echo "Checking for existing job: $JOB_NAME"
-          # List jobs and grep for ID (requires databricks-cli setup)
-          # Note: 'databricks jobs list' output format varies. Using json output for parsing.
-          # We need jq installed (ubuntu-latest has it).
           
-          EXISTING_JOB_ID=$(databricks jobs list --output json | jq -r ".jobs[] | select(.settings.name == \"$JOB_NAME\") | .job_id")
+          # Filter out WARN logs from databricks-cli output
+          EXISTING_JOB_ID=$(databricks jobs list --output json | grep -v "WARN" | jq -r ".jobs[] | select(.settings.name == \"$JOB_NAME\") | .job_id")
           
           if [ -n "$EXISTING_JOB_ID" ] && [ "$EXISTING_JOB_ID" != "null" ]; then
             echo "Found existing job ID: $EXISTING_JOB_ID. Resetting configuration..."
@@ -55,11 +55,12 @@ jobs:
           else
             echo "Job not found. Creating new job..."
             # Create returns: { "job_id": 123 }
-            JOB_ID=$(databricks jobs create --json-file "$CONFIG_FILE" | jq -r '.job_id')
+            # Only keep the JSON part (ignore warnings)
+            JOB_ID=$(databricks jobs create --json-file "$CONFIG_FILE" | grep -v "WARN" | jq -r '.job_id')
             echo "Created new job ID: $JOB_ID"
           fi
           
           echo "Triggering Run for Job ID: $JOB_ID"
-          run_id=$(databricks jobs run-now --job-id "$JOB_ID" --output json | jq -r '.run_id')
+          run_id=$(databricks jobs run-now --job-id "$JOB_ID" --output json | grep -v "WARN" | jq -r '.run_id')
           echo "Run ID: $run_id"
           echo "Track run at: $DATABRICKS_HOST/?o=0#job/$JOB_ID/run/$run_id"
