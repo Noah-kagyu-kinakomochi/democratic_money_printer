@@ -97,26 +97,7 @@ class DeepLearningStrategy(StrategyModel):
         1. Try MLflow Registry (Production).
         2. Fallback to local disk (data/best_model.pth).
         """
-        # 1. Try MLflow (if configured)
-        if os.getenv("DATABRICKS_HOST") and os.getenv("DATABRICKS_TOKEN"):
-             try:
-                 import mlflow.pytorch
-                 model_uri = "models:/MoneyPrinter_Model/Production"
-                 logger.info(f"☁️  Attempting to load from MLflow: {model_uri}")
-                 
-                 # Load directly? Or download artifact?
-                 # Loading pyfunc or pytorch directly is best
-                 # Note: This might be slow on each init. Caching recommended in real app.
-                 loaded_model = mlflow.pytorch.load_model(model_uri)
-                 self.model = loaded_model
-                 self.model.eval()
-                 self.is_trained = True
-                 logger.info("✅ Loaded Production model from MLflow Registry")
-                 return
-             except Exception as e:
-                 logger.warning(f"⚠️  MLflow load failed: {e}")
-        
-        # 2. Fallback to Local
+        # 1. Load from Local Disk
         if os.path.exists(self.model_path):
             try:
                 self.model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
@@ -126,7 +107,7 @@ class DeepLearningStrategy(StrategyModel):
             except Exception as e:
                 logger.warning(f"Failed to load local DL model: {e}")
         else:
-            logger.warning(f"⚠️  No model found at {self.model_path}. Run training in cloud first.")
+            logger.warning(f"⚠️  No model found at {self.model_path}. Train locally or place model file.")
 
     def save_model(self):
         """Save model to disk (Disabled for cloud workflow)."""
