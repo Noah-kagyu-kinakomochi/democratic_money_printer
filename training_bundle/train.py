@@ -174,7 +174,7 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
     
     # Transformers need lower starting LRs without Warmup schedulers
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
     criterion = nn.MSELoss()
     
     # Early Stopping params
