@@ -171,8 +171,16 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
     
     # 4. Train
     model = PricePredictor(input_size=input_dim)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    # Use a higher initial Learning Rate and a Scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=0.005, weight_decay=1e-4) # AdamW helps prevent overfitting
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
     criterion = nn.MSELoss()
+    
+    # Early Stopping params
+    best_loss = float('inf')
+    epochs_no_improve = 0
+    patience = 15
     
     model.train()
     for epoch in range(epochs):
@@ -191,12 +199,28 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
             optimizer.step()
             epoch_loss += loss.item()
             
-        logger.info(f"Epoch {epoch+1}/{epochs} Loss: {epoch_loss / (len(X_tensor)/batch_size):.6f}")
+        avg_loss = epoch_loss / (len(X_tensor) / batch_size)
         
-    # 5. Save Model
-    model_path = os.path.join(output_dir, "best_model.pth")
-    torch.save(model.state_dict(), model_path)
-    logger.info(f"Saved model to {model_path}")
+        # Step the scheduler
+        scheduler.step(avg_loss)
+        
+        # Log learning rate and loss
+        current_lr = optimizer.param_groups[0]['lr']
+        logger.info(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.6f} | LR: {current_lr:.6f}")
+        
+        # Early Stopping logic
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            epochs_no_improve = 0
+            # 5. Save Model (only when it improves)
+            model_path = os.path.join(output_dir, "best_model.pth")
+            torch.save(model.state_dict(), model_path)
+            logger.info(f"  🌟 New best model saved to {model_path} (Loss: {best_loss:.6f})")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                logger.warning(f"🛑 Early stopping triggered after {epoch+1} epochs! No improvement for {patience} epochs.")
+                break
 
 
 if __name__ == "__main__":
@@ -205,7 +229,7 @@ if __name__ == "__main__":
     default_data_path = os.path.join(os.path.dirname(__file__), "data.parquet")
     parser.add_argument("--data", type=str, default=default_data_path, help="Path to input .parquet file or directory")
     parser.add_argument("--output", type=str, default="results", help="Output directory")
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=150) # Bumped up significantly since we have early stopping
     args = parser.parse_args()
     
     train(args.data, args.output, args.epochs)
