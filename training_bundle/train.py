@@ -13,42 +13,79 @@ from model_def import PricePredictor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+def frac_diff(series: pd.Series, d: float = 0.4, thres: float = 0.01) -> pd.Series:
+    """Apply fractional differentiation to a pandas Series to achieve fractionally integrated stationarity."""
+    w = [1.]
+    k = 1
+    while True:
+        w_ = -w[-1] / k * (d - k + 1)
+        if abs(w_) < thres:
+            break
+        w.append(w_)
+        k += 1
+    w = np.array(w[::-1]).reshape(-1, 1)
+    
+    res = []
+    # Pad with NaN until we have enough history for the window
+    for iloc in range(len(series)):
+        if iloc < len(w) - 1:
+            res.append(np.nan)
+        else:
+            window = series.iloc[iloc - len(w) + 1 : iloc + 1].values
+            res.append(np.dot(w.T, window)[0])
+            
+    return pd.Series(res, index=series.index)
+
 def extract_features(df: pd.DataFrame, sentiment_score: float = 0.0) -> np.ndarray:
     """
-    Extract features for a specific DataFrame window.
-    Must match logic in `dl_model.py`.
-    Returns array of shape (N, features).
+    Extract 7 strictly orthogonal features for the Transformer sequence.
+    Returns array of shape (N, 7).
     """
     df = df.copy()
-    # 1. Log Return
-    df['log_ret'] = np.log(df['close'] / df['close'].shift(1)).fillna(0)
-    
     features = []
     
-    # Feature 1: Log Return
-    features.append(df['log_ret'].values.reshape(-1, 1))
+    # Feature 1: Fractionally Differentiated Price (d=0.4)
+    # Retains memory of the price curve while achieving stationarity
+    df['frac_diff'] = frac_diff(df['close'], d=0.4, thres=0.01)
+    features.append(df['frac_diff'].fillna(0).values.reshape(-1, 1))
     
     # Feature 2: Volume 
     features.append(df['volume'].values.reshape(-1, 1))
     
-    # Feature 3: Sentiment (Static approximation)
+    # Feature 3: Sentiment
     sent_arr = np.full((len(df), 1), sentiment_score)
     features.append(sent_arr)
 
-    # Macro cols
-    macro_cols = ["SP500_Close", "VIX_Close", "BTC_Close", "XLK_Close", "XLF_Close"]
-    for col in macro_cols:
-        if col in df.columns:
-            if col == "VIX_Close":
-                # Feature 4-8: VIX Level / Others Returns
-                features.append(df[col].values.reshape(-1, 1))
-            else:
-                feat = np.log(df[col] / df[col].shift(1)).fillna(0).values.reshape(-1, 1)
-                features.append(feat)
-        else:
-            features.append(np.zeros((len(df), 1)))
+    # Feature 4: US/JPY 10-Year Yield Differential
+    # Fallbacks to 0 if data is missing
+    tnx = df.get("TNX_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill().fillna(0)
+    jgbs10 = df.get("JGBS10_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill().fillna(0)
+    yield_diff = tnx - jgbs10
+    features.append(yield_diff.values.reshape(-1, 1))
+
+    # Feature 5: DXY (US Dollar Index) Return
+    dxy = df.get("DXY_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill()
+    dxy_ret = np.log(dxy / dxy.shift(1)).fillna(0)
+    features.append(dxy_ret.values.reshape(-1, 1))
+    
+    # Feature 6: ATR (Average True Range) - Rolling 14-period Volatility
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().fillna(0)
+    features.append(atr.values.reshape(-1, 1))
+    
+    # Feature 7: MACD Divergence
+    # (EMA 12 - EMA 26) - Signal(EMA 9)
+    ema12 = df['close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['close'].ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    macd_div = (macd - signal).fillna(0)
+    features.append(macd_div.values.reshape(-1, 1))
             
-    # Stack: (N, 8)
+    # Stack: (N, 7)
     return np.hstack(features)
 
 def create_sequences(data: np.ndarray, seq_len: int, targets: np.ndarray):
@@ -102,8 +139,8 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
     all_features = []
     processed_dfs = []
     
-    seq_len = 10
-    input_dim = 8
+    seq_len = 96 # 24 Hours of 15Min bars
+    input_dim = 7 # 7 Orthogonal Features
     
     # 1. Feature Extraction
     for sym in symbols:
@@ -114,8 +151,8 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
         # Assuming input is already appropriate resolution or 1Min.
         # Let's resample to 15Min for training consistency.
         try:
-            agg = {"close": "last", "volume": "sum"}
-            macro_cols = ["SP500_Close", "VIX_Close", "BTC_Close", "XLK_Close", "XLF_Close"]
+            agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+            macro_cols = ["TNX_Close", "JGBS10_Close", "DXY_Close"]
             for c in macro_cols:
                 if c in sub.columns: agg[c] = "last"
             
@@ -128,11 +165,33 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
         
         feats = extract_features(resampled)
         
-        # Shift targets (Next close return)
-        # feats column 0 is log_ret.
-        # Target for step i is return at i+1.
-        targets = feats[1:, 0] 
+        # 96-Bar Standard Deviation Volatility Threshold for Classification
+        # We classify next return relative to historical rolling std-dev.
+        targets = np.zeros(len(resampled))
+        returns = np.log(resampled['close'] / resampled['close'].shift(1)).fillna(0)
+        rolling_std = returns.rolling(96).std().fillna(0.001)
+        
+        for i in range(len(resampled) - 1):
+            next_ret = returns.iloc[i + 1]
+            sigma = rolling_std.iloc[i]
+            if next_ret > 1.5 * sigma:
+                targets[i] = 2  # UP
+            elif next_ret < -1.5 * sigma:
+                targets[i] = 0  # DOWN
+            else:
+                targets[i] = 1  # FLAT
+                
+        # feats and targets align at index `i` mapping to `return at i+1`
+        targets = targets[:-1] 
         feats = feats[:-1]
+        
+        # Drop rows where frac_diff is NaN (the burn-in period)
+        # Assuming frac_diff is the first feature (idx 0)
+        valid_idx = ~np.isnan(feats[:, 0])
+        feats = feats[valid_idx]
+        targets = targets[valid_idx]
+        
+        if len(feats) < seq_len + 5: continue
         
         processed_dfs.append((feats, targets))
         all_features.append(feats)
@@ -165,7 +224,8 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
     y_train = np.concatenate(y_train_list)
     
     X_tensor = torch.FloatTensor(X_train)
-    y_tensor = torch.FloatTensor(y_train).unsqueeze(1)
+    # Target is integer class for Cross Entropy
+    y_tensor = torch.LongTensor(y_train)
     
     logger.info(f"Training data shape: {X_tensor.shape}")
     
@@ -175,7 +235,9 @@ def train(data_path: str, output_dir: str, epochs: int = 20, batch_size: int = 3
     # Transformers need lower starting LRs without Warmup schedulers
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
-    criterion = nn.MSELoss()
+    
+    # Categorical Classification Objective
+    criterion = nn.CrossEntropyLoss()
     
     # Early Stopping params
     best_loss = float('inf')

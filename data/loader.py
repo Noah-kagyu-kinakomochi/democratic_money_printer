@@ -30,12 +30,9 @@ class HybridDataLoader:
     """
     
     MACRO_SYMBOLS = {
-        "SP500": "^GSPC",
-        "VIX": "^VIX",
-        # "10Y": "^TNX", # Often has data gaps, maybe skip for now or handle carefully
-        "BTC": "BTC-USD",
-        "XLK": "XLK", # Tech Sector
-        "XLF": "XLF", # Financial Sector
+        "TNX": "^TNX",      # US 10-Year Treasury Yield
+        "JGBS10": "^JGBS10",# JGB 10-Year Yield
+        "DXY": "DX-Y.NYB",  # US Dollar Index
     }
     
     def __init__(self, storage_dir: str = "data/storage"):
@@ -132,9 +129,9 @@ class HybridDataLoader:
         context = last_row.to_dict()
         context['macro_timestamp'] = timestamp
         
-        # Calculate derived metrics (e.g. VIX regime)
-        if "VIX_Close" in context:
-            context["VIX_Level"] = "HIGH" if context["VIX_Close"] > 20 else "LOW"
+        # Calculate derived metrics (e.g. Yield Diff)
+        if "TNX_Close" in context and "JGBS10_Close" in context:
+            context["Yield_Diff"] = context["TNX_Close"] - context["JGBS10_Close"]
             
         return context
 

@@ -43,27 +43,74 @@ try:
     from training_bundle.model_def import PricePredictor
 except ImportError:
     # Fallback/Local dev
-    class PricePredictor(nn.Module):
-        """LSTM with Batch Normalization for sequence-based price prediction."""
-        def __init__(self, input_size: int, hidden_size: int = 128, num_layers: int = 2):
+    import math
+
+    class PositionalEncoding(nn.Module):
+        """Injects positional information into the sequence for the Transformer."""
+        def __init__(self, d_model: int, max_len: int = 5000):
             super().__init__()
-            self.lstm = nn.LSTM(
-                input_size=input_size, 
-                hidden_size=hidden_size, 
-                num_layers=num_layers, 
-                batch_first=True,
-                dropout=0.3
-            )
-            self.bn = nn.BatchNorm1d(hidden_size)
-            self.relu = nn.ReLU()
-            self.fc = nn.Linear(hidden_size, 1)
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+            pe[:, 0::2] = torch.sin(position * div_term)
+            if d_model % 2 == 1:
+                pe[:, 1::2] = torch.cos(position * div_term[:-1])
+            else:
+                pe[:, 1::2] = torch.cos(position * div_term)
+            pe = pe.unsqueeze(0)
+            self.register_buffer('pe', pe)
 
         def forward(self, x):
-            out, _ = self.lstm(x)
-            out = out[:, -1, :]
-            out = self.bn(out)
-            out = self.relu(out)
-            return self.fc(out)
+            x = x + self.pe[:, :x.size(1), :]
+            return x
+
+    class PricePredictor(nn.Module):
+        """Transformer for sequence-based price prediction"""
+        def __init__(self, input_size: int, d_model: int = 64, nhead: int = 4, num_layers: int = 2, dim_feedforward: int = 128, dropout: float = 0.2):
+            super().__init__()
+            self.input_projection = nn.Linear(input_size, d_model)
+            self.pos_encoder = PositionalEncoding(d_model)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, 
+                dropout=dropout, batch_first=True
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+            self.fc_out = nn.Sequential(
+                nn.Linear(d_model, 32),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+            nn.Linear(32, 3) # 3 Classes: DOWN (0), FLAT (1), UP (2)
+        )
+
+        def forward(self, x):
+            x = self.input_projection(x)
+            x = self.pos_encoder(x)
+            x = self.transformer_encoder(x)
+            out = x[:, -1, :]
+            return self.fc_out(out)
+
+def frac_diff(series: pd.Series, d: float = 0.4, thres: float = 0.01) -> pd.Series:
+    """Apply fractional differentiation to a pandas Series to achieve fractionally integrated stationarity."""
+    w = [1.]
+    k = 1
+    while True:
+        w_ = -w[-1] / k * (d - k + 1)
+        if abs(w_) < thres:
+            break
+        w.append(w_)
+        k += 1
+    w = np.array(w[::-1]).reshape(-1, 1)
+    
+    res = []
+    # Pad with NaN until we have enough history for the window
+    for iloc in range(len(series)):
+        if iloc < len(w) - 1:
+            res.append(np.nan)
+        else:
+            window = series.iloc[iloc - len(w) + 1 : iloc + 1].values
+            res.append(np.dot(w.T, window)[0])
+            
+    return pd.Series(res, index=series.index)
 
 
 class DeepLearningStrategy(StrategyModel):
@@ -80,12 +127,11 @@ class DeepLearningStrategy(StrategyModel):
         self.processor = DataProcessor("data/scaler.pkl")
         
         # Hyperparams
-        self.seq_len = 10
+        self.seq_len = 96
         self.resample_tf = "15Min" 
         
-        # Features (example count):
-        # Price(1) + Volume(1) + Sentiment(1) + Macro(5) = 8 base features
-        self.input_dim = 8 
+        # Features: Frac-Diff(1) + Vol(1) + Sent(1) + Yield Diff(1) + DXY(1) + ATR(1) + MACD(1) = 7
+        self.input_dim = 7
         
         self.model = None
         self.is_trained = False
@@ -139,40 +185,46 @@ class DeepLearningStrategy(StrategyModel):
         Extract features for a specific DataFrame window.
         Returns array of shape (N, features).
         """
-        # Calculate returns
-        df = df.copy()
-        df['log_ret'] = np.log(df['close'] / df['close'].shift(1)).fillna(0)
+        # Feature 1: Fractionally Differentiated Price (d=0.4)
+        df['frac_diff'] = frac_diff(df['close'], d=0.4, thres=0.01)
+        features.append(df['frac_diff'].fillna(0).values.reshape(-1, 1))
         
-        # Macro cols
-        macro_cols = ["SP500_Close", "VIX_Close", "BTC_Close", "XLK_Close", "XLF_Close"]
-        
-        # Feature list construction
-        features = []
-        
-        # Log Return
-        features.append(df['log_ret'].values.reshape(-1, 1))
-        
-        # Volume (Log or Norm? RobustScaler handles it)
+        # Feature 2: Volume 
         features.append(df['volume'].values.reshape(-1, 1))
         
-        # Sentiment (Static for this window or time-variant? Here static approximation)
+        # Feature 3: Sentiment
         sent_arr = np.full((len(df), 1), sentiment_score)
         features.append(sent_arr)
 
-        # Macro
-        for col in macro_cols:
-            if col in df.columns:
-                if col == "VIX_Close":
-                    # VIX is level
-                    features.append(df[col].values.reshape(-1, 1))
-                else:
-                    # Others are returns
-                    feat = np.log(df[col] / df[col].shift(1)).fillna(0).values.reshape(-1, 1)
-                    features.append(feat)
-            else:
-                features.append(np.zeros((len(df), 1)))
-                
-        # Stack: (N, 8)
+        # Feature 4: US/JPY 10-Year Yield Differential
+        tnx = df.get("TNX_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill().fillna(0)
+        jgbs10 = df.get("JGBS10_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill().fillna(0)
+        yield_diff = tnx - jgbs10
+        features.append(yield_diff.values.reshape(-1, 1))
+
+        # Feature 5: DXY (US Dollar Index) Return
+        dxy = df.get("DXY_Close", pd.Series(np.zeros(len(df)), index=df.index)).ffill()
+        dxy_ret = np.log(dxy / dxy.shift(1)).fillna(0)
+        features.append(dxy_ret.values.reshape(-1, 1))
+        
+        # Feature 6: ATR (Average True Range) - Rolling 14-period Volatility
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean().fillna(0)
+        features.append(atr.values.reshape(-1, 1))
+        
+        # Feature 7: MACD Divergence
+        # (EMA 12 - EMA 26) - Signal(EMA 9)
+        ema12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema26 = df['close'].ewm(span=26, adjust=False).mean()
+        macd = ema12 - ema26
+        signal = macd.ewm(span=9, adjust=False).mean()
+        macd_div = (macd - signal).fillna(0)
+        features.append(macd_div.values.reshape(-1, 1))
+            
+        # Stack: (N, 7)
         return np.hstack(features)
 
     def prepare_input(self, symbol: str, data: pd.DataFrame, sentiment_score: float) -> torch.Tensor:
@@ -187,12 +239,12 @@ class DeepLearningStrategy(StrategyModel):
         is_daily = "Day" in self.config.timeframe
         tf = "1Day" if is_daily else self.resample_tf
         
-        agg = {"close": "last", "volume": "sum"}
-        macro_cols = ["SP500_Close", "VIX_Close", "BTC_Close", "XLK_Close", "XLF_Close"]
-        for c in macro_cols:
-            if c in data.columns: agg[c] = "last"
-            
         try:
+            agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+            macro_cols = ["TNX_Close", "JGBS10_Close", "DXY_Close"]
+            for c in macro_cols:
+                if c in data.columns: agg[c] = "last"
+            
             df = data.set_index("timestamp").resample(tf).agg(agg).dropna()
         except:
             if isinstance(data.index, pd.DatetimeIndex):
@@ -247,42 +299,42 @@ class DeepLearningStrategy(StrategyModel):
             return Signal(SignalType.HOLD, 0.0, self.name, symbol, "Insufficient data")
             
         with torch.no_grad():
-            pred_return = self.model(inp_tensor).item()
+            logits = self.model(inp_tensor) # (1, 3)
+            # Apply Softmax to get probabilities
+            probs = torch.nn.functional.softmax(logits, dim=1).squeeze().numpy()
             
-        # Dynamic Threshold based on Volatility (ATR-like)
-        # Calculate Rolling StdDev of returns (last 24h)
-        # Use existing data DataFrame
+        # Classes: DOWN (0), FLAT (1), UP (2)
+        prob_down = float(probs[0])
+        prob_flat = float(probs[1])
+        prob_up   = float(probs[2])
         
-        # Crude Volatility Estimate:
-        # Calculate log returns of the input data
-        # We need to access the 'close' column
-        closes = data["close"]
-        rets = np.log(closes / closes.shift(1)).dropna()
-        vol = rets.std() 
-        # If data is 1Min, this is 1Min vol. 
-        # Model predicts 15Min/1Day return?
-        # Model predicts NEXT STEP return. If resample_tf is 15Min, it predicts 15Min return.
-        # Volatility should be scaled to the horizon.
-        # If vol is 1Min, we need sqrt(15) scaling to get 15Min vol?
+        predicted_class = np.argmax(probs)
+        confidence = float(np.max(probs))
         
-        if "Day" in self.config.timeframe: 
-            # Daily data -> Daily vol
-            period_vol = vol 
-        else:
-            # Intraday (1Min) -> Scaled to 15Min
-            period_vol = vol * np.sqrt(15)
+        # Threshold for action
+        # The model is trained to identify > 1.5 sigma moves.
+        # So any "UP" or "DOWN" class prediction is already a strong signal.
+        if predicted_class == 2 and confidence > 0.4:
+            return Signal(
+                SignalType.BUY, 
+                confidence, 
+                self.name, 
+                symbol, 
+                f"UP Breakout prob: {prob_up:.1%} (FLAT: {prob_flat:.1%}, DOWN: {prob_down:.1%})"
+            )
+        elif predicted_class == 0 and confidence > 0.4:
+            return Signal(
+                SignalType.SELL, 
+                confidence, 
+                self.name, 
+                symbol, 
+                f"DOWN Breakout prob: {prob_down:.1%} (FLAT: {prob_flat:.1%}, UP: {prob_up:.1%})"
+            )
             
-        if pd.isna(period_vol) or period_vol == 0:
-            period_vol = 0.001 # fallback 0.1% volatility
-            
-        # Threshold: 0.5 * Volatility
-        threshold = 0.5 * period_vol
-        
-        confidence = min(abs(pred_return) / (threshold + 1e-6), 1.0)
-        
-        if pred_return > threshold:
-            return Signal(SignalType.BUY, confidence, self.name, symbol, f"Pred {pred_return:.2%} > {threshold:.2%} (Vol)")
-        elif pred_return < -threshold:
-            return Signal(SignalType.SELL, confidence, self.name, symbol, f"Pred {pred_return:.2%} < -{threshold:.2%} (Vol)")
-            
-        return Signal(SignalType.HOLD, 0.0, self.name, symbol, f"Pred {pred_return:.2%} within {threshold:.2%} band")
+        return Signal(
+            SignalType.HOLD, 
+            prob_flat, 
+            self.name, 
+            symbol, 
+            f"FLAT predicted. Probabilities -> UP: {prob_up:.1%}, FLAT: {prob_flat:.1%}, DOWN: {prob_down:.1%}"
+        )
