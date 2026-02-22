@@ -1,113 +1,42 @@
 # Strategy Models Documentation
 
-This document details the 7 strategy models available in the MoneyPrinter bot. Each model operates independently within the Democratic Ensemble.
+This document details the strategy models available in the MoneyPrinter bot. 
 
-## 1. Deep Learning Strategy (`DL`)
-
-A PyTorch-based neural network predicting 1-hour price returns using a rich feature set.
-
-### Architecture
-- **Type**: Multi-Layer Perceptron (MLP)
-- **Structure**: Input Layer -> Dense(64, ReLU) -> Dropout(0.2) -> Dense(32, ReLU) -> Dense(1)
-- **Output**: Predicted % Turn for the next 1 hour.
-
-### Inputs (103 Features)
-1. **Price History (96)**: Log-normalized returns of the last 24 hours (resampled to 15-min intervals).
-   - *Note*: For Daily timeframe models (`DL_1Day`), this uses the last 96 days of daily closes.
-2. **Volume (1)**: Recent volume normalized by average volume.
-3. **Sentiment (1)**: News Sentiment Score (from Alpha Vantage).
-4. **Macro Data (5)**:
-   - **SP500**: S&P 500 Index Close
-   - **VIX**: Volatility Index
-   - **BTC**: Bitcoin Price
-   - **XLK**: Tech Sector ETF
-   - **XLF**: Financial Sector ETF
-
-### Logic
-- **Training**: Auto-trains on historical data when running `python main.py weights`.
-- **Inference**:
-  - `Predicted Return > 0.5%` → **BUY**
-  - `Predicted Return < -0.5%` → **SELL**
+> [!IMPORTANT]
+> As of the migration to the serverless Cloud Run Architecture, **all legacy rule-based models (MA, RSI, MACD, Sentiment, Correlation) have been disabled**. 
+> 
+> The system now concentrates 100% of its memory, compute, and decision-making authority exclusively on the Deep Learning (`DL`) model. The DL model acts as an internal democracy, assigning Multi-Head Attention weights to various technical and macroeconomic inputs simultaneously.
 
 ---
 
-## 2. Moving Average Crossover (`MA`)
+## The Deep Learning Strategy (`DL`)
 
-Classic trend-following strategy.
+A PyTorch-based Time-Series Transformer network predicting 1-hour/15-minute price returns using a rich, dynamically weighted feature set.
 
-- **Logic**: Compares Short-term MA vs Long-term MA.
-  - `Short MA > Long MA` → **BUY**
-  - `Short MA < Long MA` → **SELL**
-- **Parameters**:
-  - `short_window`: 10 (bars)
-  - `long_window`: 30 (bars)
+### Architecture: Time-Series Transformer
+The original Multi-Layer Perceptron (MLP) and LSTM architectures have been ripped out and upgraded to a highly capable **Encoder-Only Transformer**.
+- **Positional Encoding**: Injects sine and cosine wave equations into the timeframes so the Transformer understands sequential order, even though it processes all data points simultaneously.
+- **Multi-Head Self-Attention**: Allows the model to look at the entire sequence of pricing data and learn geometric relationships between specific features across time.
+- **Optimizer**: `AdamW` (Adaptive Moment Estimation with decoupled weight decay) at `1e-4` LR.
+- **Scheduler**: PyTorch `ReduceLROnPlateau` drops the learning rate dynamically if inference loss stagnates.
+- **Decision Engine**:
+  - `Predicted Return > 0.0` → **BUY**
+  - `Predicted Return < 0.0` → **SELL**
 
----
+### Inputs (8 Features per timeframe)
+Instead of looking at 100+ raw normalized closing prices, the Transformer takes in sequences of exactly **8 engineered features** per bar:
 
-## 3. RSI Strategy (`RSI`)
+1. **Asset Return**: Continuous $\ln$ return of the current asset (e.g., FXY).
+2. **Asset Volume**: Raw trading volume of the asset.
+3. **Sentiment Score**: The aggregated FinBERT NLP sentiment score for the asset over the last 24 hours from Alpha Vantage.
+4. **VIX Level**: The raw CBOE Volatility Index representing broader market fear.
+5. **SP500 Return**: The $\ln$ return of the broader stock market index.
+6. **BTC Return**: The $\ln$ return of Bitcoin (utilized as a Crypto/Risk-On volatility indicator).
+7. **XLK Return**: The $\ln$ return of the Technology Sector ETF.
+8. **XLF Return**: The $\ln$ return of the Financial Sector ETF.
 
-Mean-reversion strategy based on the Relative Strength Index.
+The Transformer analyzes sequences of 10 of these bars (so 80 discrete data points per batch) to predict the very next expected return period.
 
-- **Logic**:
-  - `RSI < 30` (Oversold) → **BUY**
-  - `RSI > 70` (Overbought) → **SELL**
-- **Parameters**:
-  - `period`: 14
-  - `oversold`: 30
-  - `overbought`: 70
-
----
-
-## 4. MACD Strategy (`MACD`)
-
-Momentum strategy using Moving Average Convergence Divergence.
-
-- **Logic**:
-  - `MACD Line > Signal Line` → **BUY**
-  - `MACD Line < Signal Line` → **SELL**
-- **Parameters**:
-  - `fast_period`: 12
-  - `slow_period`: 26
-  - `signal_period`: 9
-
----
-
-## 5. AutoRegression (`AutoReg`)
-
-Statistical model predicting future price based on past lags.
-
-- **Logic**: Uses Ridge Regression to fit recent price changes.
-  - `Predicted Price > Current Price` → **BUY** (if confidence high)
-  - `Predicted Price < Current Price` → **SELL**
-- **Parameters**:
-  - `lags`: 30
-  - `train_window`: 120
-
----
-
-## 6. Correlation Regime (`CorrRegime`)
-
-Detects market regimes using Price-Volume Correlation.
-
-- **Logic**:
-  - **High Correlation (> 0.5)**: Trend is strong (Volume confirming Price).
-    - If Price Up + Vol Confirmed → **BUY**
-    - If Price Down + Vol Confirmed → **SELL**
-  - **Low Correlation**: Market is chopping/uncertain → **HOLD**
-- **Parameters**:
-  - `corr_window`: 30
-  - `shift_lookback`: 5
-
----
-
-## 7. Sentiment Strategy (`Sentiment`)
-
-Fundamental analysis using news sentiment.
-
-- **Logic**: Aggregates news sentiment scores (0 to 1) over the last 24 hours.
-  - `Average Score > 0.15` (Positive) → **BUY**
-  - `Average Score < -0.15` (Negative) → **SELL**
-- **Data Source**: Alpha Vantage News API.
-- **Parameters**:
-  - `threshold`: 0.15
-  - `lookback_hours`: 24
+### Execution Flow
+- **Training (Batch Process)**: Runs weekly via the `moneyprinter-train-job` leveraging an ephemeral Google Cloud NVIDIA Tesla L4 GPU.
+- **Inference (Live Execution)**: The `moneyprinter-run-job` downloads the newly calculated `best_model.pth` artifact from GCS into RAM every 15 minutes, executes ultra-fast CPU inference over current market prices, casts the democratic vote, and submits Alpaca trades.
