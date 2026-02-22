@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from data.processor import DataProcessor
+from data.gcs_utils import GCSManager
+from config.settings import GCSConfig
 
 try:
     import torch
@@ -93,17 +95,27 @@ class DeepLearningStrategy(StrategyModel):
 
     def _load_model(self):
         """
-        Load model:
-        1. Try MLflow Registry (Production).
-        2. Fallback to local disk (data/best_model.pth).
+        Load model artifacts:
+        1. Attempt to pull the latest `best_model.pth` and `scaler.pkl` from GCS.
+        2. Fall back to local disk if GCS is unconfigured or files are absent.
         """
-        # 1. Load from Local Disk
+        gcs = GCSManager()
+        gcs_paths = GCSConfig()  # Provides canonical path defaults
+
+        if gcs.bucket_name:
+            logger.info("☁️  Pulling latest model artifacts from GCS...")
+            gcs.download_file(gcs_paths.model_path, self.model_path, ignore_missing=True)
+            gcs.download_file(gcs_paths.scaler_path, "data/scaler.pkl", ignore_missing=True)
+        else:
+            logger.debug("GCS_BUCKET_NAME not set — using local model artifacts only.")
+
+        # Load from disk (may have just been refreshed from GCS)
         if os.path.exists(self.model_path):
             try:
                 self.model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
                 self.model.eval()
                 self.is_trained = True
-                logger.info(f"🧠 Loaded Local model from {self.model_path}")
+                logger.info(f"🧠 Successfully loaded DL model from {self.model_path}")
             except Exception as e:
                 logger.warning(f"Failed to load local DL model: {e}")
         else:

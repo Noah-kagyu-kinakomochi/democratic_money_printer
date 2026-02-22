@@ -132,10 +132,9 @@ class WeightLearner:
 
                 tasks.append((model, symbol, data))
 
-        # Run in parallel
-        # specific n_jobs=-1 uses all cores. 
-        # We pass self.config.backtest_config to re-init engine in workers
-        results = Parallel(n_jobs=-1, backend="loky")(
+        # Run in parallel (n_jobs=4)
+        # Reduced lookback_days=7 prevents excessive memory usage/freezing
+        results = Parallel(n_jobs=4, backend="loky")(
             delayed(_run_backtest_job)(model, symbol, data, self.config.backtest_config)
             for model, symbol, data in tasks
         )

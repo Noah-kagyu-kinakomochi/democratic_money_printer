@@ -1,0 +1,109 @@
+name: Ephemeral GCP GPU Training
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual trigger
+
+env:
+  PROJECT_ID: moneyprinter-prod
+  ZONE: us-central1-a
+  INSTANCE_NAME: gpu-trainer-${{ github.sha }}
+  BUCKET_NAME: moneyprinter-artifacts-prod
+  TRAINING_SCRIPT: training_bundle/train.py
+  GCS_DATASET_PATH: datasets/data.parquet
+  GCS_MODEL_DIR: models
+
+jobs:
+  train-on-gcp:
+    runs-on: ubuntu-latest
+    
+    # Required for GCP Workload Identity Federation
+    permissions:
+      contents: read
+      id-token: write 
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # Use Workload Identity Federation (recommended) or Service Account JSON key
+          workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider
+          service_account: my-service-account@your-gcp-project-id.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Provision Ephemeral GPU Instance
+        run: |
+          gcloud compute instances create ${{ env.INSTANCE_NAME }} \
+            --project=${{ env.PROJECT_ID }} \
+            --zone=${{ env.ZONE }} \
+            --machine-type=n1-standard-4 \
+            --accelerator=type=nvidia-tesla-t4,count=1 \
+            --image-family=pytorch-latest-gpu \
+            --image-project=deeplearning-platform-release \
+            --boot-disk-size=100GB \
+            --maintenance-policy=TERMINATE \
+            --provisioning-model=SPOT \
+            --scopes=https://www.googleapis.com/auth/cloud-platform \
+            --metadata="install-nvidia-driver=True"
+            
+          # Note: We use provisioning-model=SPOT for cost savings on ephemeral instances.
+          # The image pytorch-latest-gpu comes with CUDA and PyTorch pre-installed.
+
+      - name: Wait for SSH to become ready
+        run: |
+          echo "Waiting for instance to boot and SSH to become available..."
+          # Retry loop to wait for SSH connections
+          for i in {1..15}; do
+            gcloud compute ssh ${{ env.INSTANCE_NAME }} --zone=${{ env.ZONE }} --command="echo SSH ready" && break || sleep 10
+          done
+
+      - name: Transfer Project Code to Instance
+        run: |
+          # Create a workspace directory and copy all project source code (excluding data.parquet if local)
+          gcloud compute ssh ${{ env.INSTANCE_NAME }} --zone=${{ env.ZONE }} --command="mkdir -p ~/workspace/output"
+          # Using rsync to exclude data folders from local to prevent massive uploads
+          gcloud compute scp --recurse --compress ./* ${{ env.INSTANCE_NAME }}:~/workspace/ --zone=${{ env.ZONE }}
+
+      - name: Download Dataset from GCS & Run PyTorch Training
+        run: |
+          # Execute the training script inside the GPU instance
+          gcloud compute ssh ${{ env.INSTANCE_NAME }} --zone=${{ env.ZONE }} --command="
+            cd ~/workspace
+            
+            # Download Massive Parquet File directly from GCS bucket (fastest)
+            echo 'Downloading dataset from GCS...'
+            mkdir -p training_bundle
+            gsutil cp gs://${{ env.BUCKET_NAME }}/datasets/data.parquet training_bundle/data.parquet
+            
+            # Install any additional dependencies if a requirements file exists
+            if [ -f training_bundle/requirements_train.txt ]; then pip install -r training_bundle/requirements_train.txt; fi
+            
+            # Run the training script (default points to local data.parquet)
+            python ${{ env.TRAINING_SCRIPT }}
+          "
+
+      - name: Upload .pt Artifact to GCS Bucket
+        run: |
+          # Using gsutil to copy the model artifacts (.pt files) directly to your GCS bucket
+          gcloud compute ssh ${{ env.INSTANCE_NAME }} --zone=${{ env.ZONE }} --command="
+            gsutil cp ${MODEL_OUTPUT_DIR}/*.pt gs://${{ env.BUCKET_NAME }}/models/run-${{ github.sha }}/
+          "
+
+      - name: Destroy Ephemeral Instance
+        if: always() # Ensures cleanup runs EVEN IF previous steps (like training) fail
+        run: |
+          echo "Destroying GPU instance..."
+          gcloud compute instances delete ${{ env.INSTANCE_NAME }} \
+            --project=${{ env.PROJECT_ID }} \
+            --zone=${{ env.ZONE }} \
+            --quiet

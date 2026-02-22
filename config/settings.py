@@ -47,24 +47,24 @@ class StorageConfig:
 class StrategyConfig:
     """Configuration for the democratic strategy engine."""
     voting_method: str = "weighted"  # "majority", "weighted", or "unanimous"
-    min_confidence: float = 0.6  # minimum confidence threshold to act
-    default_symbols: list[str] = field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "FXY"])
+    min_confidence: float = 0.3  # minimum confidence threshold to act (Lowered for FXY)
+    default_symbols: list[str] = field(default_factory=lambda: ["FXY"])
     # 5Min and 15Min are now generated on-the-fly from 1Min
     timeframes: list[str] = field(default_factory=lambda: ["1Min", "1Day"])
-    lookback_days: int = 60  # how many days of history to analyze
+    lookback_days: int = 7  # how many days of history to analyze (7 days for weight learning)
     min_model_weight: float = 0.01  # Skip models with weight below this to save compute
 
     # Active models (can be set via ACTIVE_MODELS env var)
     #in active : DL
     active_models: list[str] = field(default_factory=lambda: [
-        m.strip() for m in _env("ACTIVE_MODELS", "MA,RSI,MACD,AutoReg,CorrRegime,Sentiment").split(",") if m.strip()
+        m.strip() for m in _env("ACTIVE_MODELS", "MA,CorrRegime,Sentiment,GB,MACD").split(",") if m.strip()
     ])
 
 
 @dataclass(frozen=True)
 class TradingConfig:
     mode: str = "paper"  # "paper" or "live"
-    max_position_pct: float = 0.1  # max 10% of portfolio per position
+    max_position_pct: float = 0.95  # max 95% of portfolio per position (Sniper Mode)
     default_qty: int = 1  # default shares per trade
     does_short: bool = True  # allow short selling
 
@@ -85,6 +85,15 @@ class RegimeConfig:
 
 
 @dataclass(frozen=True)
+class GCSConfig:
+    """Google Cloud Storage configuration for artifact management."""
+    bucket_name: str = ""
+    dataset_path: str = "datasets/data.parquet"   # GCS path for training data
+    model_path: str = "models/best_model.pth"      # GCS path for trained model
+    scaler_path: str = "models/scaler.pkl"          # GCS path for scaler
+
+
+@dataclass(frozen=True)
 class AlphaVantageConfig:
     api_key: str = ""
     base_url: str = "https://www.alphavantage.co/query"
@@ -98,6 +107,7 @@ class Settings:
     strategy: StrategyConfig
     trading: TradingConfig
     regime: RegimeConfig
+    gcs: GCSConfig
     project_root: Path = _PROJECT_ROOT
 
 
@@ -132,4 +142,7 @@ def load_settings() -> Settings:
             does_short=_env("DOES_SHORT", "true").lower() == "true",
         ),
         regime=RegimeConfig(),
+        gcs=GCSConfig(
+            bucket_name=_env("GCS_BUCKET_NAME"),
+        ),
     )

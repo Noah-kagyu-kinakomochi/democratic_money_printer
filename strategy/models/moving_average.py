@@ -26,8 +26,8 @@ class MovingAverageCrossover(StrategyModel):
     def __init__(self, config: ModelConfig = None):
         if config is None:
             config = ModelConfig(name="MA_Crossover", weight=1.0, params={
-                "short_window": 10,
-                "long_window": 30,
+                "short_window": 5,
+                "long_window": 20,
             })
         super().__init__(config)
         self.short_window = config.params.get("short_window", 10)

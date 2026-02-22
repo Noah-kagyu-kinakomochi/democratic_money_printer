@@ -153,10 +153,72 @@ class PortfolioBacktester:
                 if mask_next.any():
                     prices_next_open[symbol] = float(day_data.loc[mask_next].iloc[-1]["open"])
 
+            # Calculate approximate equity for sizing (using yesterday's close)
+            # This mimics "Account Equity" available at the start of the day
+            current_equity = cash
+            for sym, qty in positions.items():
+                p = prices_today.get(sym, 0)
+                if qty > 0:
+                     current_equity += qty * p
+                elif qty < 0:
+                     # Short equity approximation (margin + pnl)
+                     entry = entry_prices.get(sym, p)
+                     margin = entry * abs(qty)
+                     unrealized_pnl = (entry - p) * abs(qty)
+                     current_equity += margin + unrealized_pnl
+
             # Run democratic voting for each symbol
             for symbol in symbols:
                 if symbol not in prices_today or symbol not in prices_next_open:
                     continue
+
+                # 🛑 Hard Stop Loss Check 🛑
+                # Check if current position is down > 2%
+                current_qty = positions.get(symbol, 0.0)
+                if current_qty != 0:
+                    entry = entry_prices.get(symbol, 0.0)
+                    current_price = prices_today.get(symbol, 0.0)
+                    if entry > 0:
+                        if current_qty > 0:
+                             # Long Position
+                             pnl_pct = (current_price - entry) / entry
+                             if pnl_pct < -0.02: # -2% Stop Loss
+                                 # Force Close
+                                 exec_price = prices_next_open[symbol]
+                                 exec_price_adj = exec_price * (1 - self.slippage_pct)
+                                 pnl = (exec_price_adj - entry) * current_qty
+                                 cash += current_qty * exec_price_adj
+                                 per_symbol_pnl[symbol] += pnl
+                                 per_symbol_trades[symbol] += 1
+                                 all_trades.append(SimTrade(
+                                     day=day_idx, date=next_date, symbol=symbol,
+                                     side="SELL (Stop Loss)", qty=current_qty,
+                                     price=exec_price_adj, pnl=pnl,
+                                 ))
+                                 positions.pop(symbol, None)
+                                 entry_prices.pop(symbol, None)
+                                 continue # Skip voting for this symbol
+
+                        elif current_qty < 0:
+                             # Short Position
+                             pnl_pct = (entry - current_price) / entry
+                             if pnl_pct < -0.02: # -2% Stop Loss
+                                 # Force Cover
+                                 exec_price = prices_next_open[symbol]
+                                 exec_price_adj = exec_price * (1 + self.slippage_pct)
+                                 pnl = (entry - exec_price_adj) * abs(current_qty)
+                                 margin = entry * abs(current_qty)
+                                 cash += margin + pnl
+                                 per_symbol_pnl[symbol] += pnl
+                                 per_symbol_trades[symbol] += 1
+                                 all_trades.append(SimTrade(
+                                     day=day_idx, date=next_date, symbol=symbol,
+                                     side="COVER (Stop Loss)", qty=abs(current_qty),
+                                     price=exec_price_adj, pnl=pnl,
+                                 ))
+                                 positions.pop(symbol, None)
+                                 entry_prices.pop(symbol, None)
+                                 continue # Skip voting for this symbol
 
                 # Build data windows for each timeframe
                 data_by_tf = {}
@@ -180,6 +242,10 @@ class PortfolioBacktester:
                 signal = consensus.signal_type
                 current_qty = positions.get(symbol, 0.0)
                 exec_price = prices_next_open[symbol]
+                
+                # Dynamic Sizing: Equity * MaxPct * Confidence
+                base_trade_value = current_equity * self.position_size_pct
+                scaled_trade_value = base_trade_value * consensus.confidence
 
                 # Execute based on signal
                 if signal == SignalType.BUY:
@@ -202,7 +268,7 @@ class PortfolioBacktester:
 
                     elif current_qty == 0:
                         # Open long
-                        trade_value = cash * self.position_size_pct
+                        trade_value = scaled_trade_value
                         if trade_value > 10 and cash >= trade_value:
                             qty = trade_value / exec_price_adj
                             cash -= trade_value
@@ -233,7 +299,7 @@ class PortfolioBacktester:
 
                     elif current_qty == 0 and self.does_short:
                         # Open short — set aside margin collateral
-                        trade_value = cash * self.position_size_pct
+                        trade_value = scaled_trade_value
                         if trade_value > 10 and cash >= trade_value:
                             qty = trade_value / exec_price_adj
                             cash -= trade_value  # short margin collateral

@@ -11,6 +11,7 @@ Usage:
     python main.py backtest      Run backtests for all models
     python main.py simulate      Full portfolio simulation (1 year, $1000)
     python main.py weights       Learn and display adaptive weights
+    python main.py train-ml      Train ML models (Gradient Boosting, etc.)
     python main.py package       Bundle data for cloud training
 """
 
@@ -21,6 +22,7 @@ import pandas as pd
 
 from config.settings import load_settings
 from core.engine import MoneyPrinterEngine, setup_logging, console
+from data.gcs_utils import GCSManager
 
 
 def main():
@@ -49,7 +51,7 @@ def main():
         sys.exit(1)
 
     engine = MoneyPrinterEngine(settings)
-
+    gcs = GCSManager(bucket_name=settings.gcs.bucket_name or None)
     try:
         if command == "run":
             engine.run_cycle()
@@ -121,6 +123,8 @@ def main():
             engine.run_portfolio_backtest()
         elif command == "weights":
             engine.learn_weights()
+        elif command == "train-ml":
+            engine.train_ml_models()
         elif command == "package":
             console.rule("[bold cyan]Packaging for Cloud Training 📦")
             
@@ -141,11 +145,23 @@ def main():
                     df.to_parquet(target_path)
                     
                     console.print(f"  ✅ Bundled {len(df)} rows from {len(files)} files.")
-                    console.print(f"  📁 Saved to: [bold green]{target_path}[/bold green]")
-                    console.print("\n[bold yellow]Next Steps:[/bold yellow]")
-                    console.print("  1. Zip the 'training_bundle' folder.")
-                    console.print("  2. Upload to Databricks/Colab.")
-                    console.print("  3. Run: pip install -r requirements_train.txt && python train.py")
+                    console.print(f"  📁 Saved locally to: [bold green]{target_path}[/bold green]")
+                    
+                    # 3. Upload directly to GCS
+                    if gcs.bucket_name:
+                        console.print("  ☁️  Uploading to Google Cloud Storage...")
+                        gcs_dest = settings.gcs.dataset_path
+                        success = gcs.upload_file(target_path, gcs_dest)
+                        if success:
+                            console.print(f"  ✅ Uploaded to gs://{gcs.bucket_name}/{gcs_dest}")
+                        else:
+                            console.print("[red]❌ GCS Upload failed! Check credentials and bucket name.[/red]")
+                    else:
+                        console.print("[yellow]⚠️  GCS_BUCKET_NAME not set — skipping upload. Set it in .env to enable.[/yellow]")
+
+                    console.print("\n[bold yellow]Next Steps (Automated):[/bold yellow]")
+                    console.print("  1. Push to `main` to trigger GitHub Actions (gcp-gpu-training.yml).")
+                    console.print("  2. The cloud workflow will pull `data.parquet` directly from GCS.")
                 except Exception as e:
                     console.print(f"[red]❌ Consolidation failed: {e}[/red]")
         else:

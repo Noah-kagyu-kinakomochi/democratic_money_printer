@@ -17,6 +17,8 @@ import pandas as pd
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
+from rich.markup import escape
+from rich.text import Text
 
 from backtesting.engine import BacktestConfig, BacktestEngine
 from backtesting.portfolio_backtest import PortfolioBacktester, print_backtest_report
@@ -43,6 +45,7 @@ from trading.alpaca_broker import AlpacaBroker
 from trading.base import Broker
 from strategy.models.sentiment_strategy import SentimentStrategy
 from strategy.models.dl_model import DeepLearningStrategy
+from strategy.models.gb_strategy import GradientBoostingStrategy
 from strategy.regime import RegimeDetector, MarketRegime
 from data.loader import HybridDataLoader
 
@@ -168,15 +171,15 @@ class MoneyPrinterEngine:
     def _create_models(timeframes: list[str], data_fetcher: DataFetcher, active_models: list[str]) -> list:
         """
         Factory: create one instance of each strategy model per timeframe.
-        e.g. 3 strategies × 4 timeframes = 12 models.
         """
         strategy_defs = [
-            (MovingAverageCrossover, "MA", 1.0, {"short_window": 10, "long_window": 30}),
+            (MovingAverageCrossover, "MA", 1.0, {"short_window": 5, "long_window": 20}),
             (RSIStrategy, "RSI", 1.0, {"period": 14, "oversold": 30, "overbought": 70}),
             (MACDStrategy, "MACD", 1.0, {"fast_period": 12, "slow_period": 26, "signal_period": 9}),
             (AutoRegressionStrategy, "AutoReg", 1.0, {"lags": 30, "train_window": 120}),
             (CorrelationRegimeStrategy, "CorrRegime", 1.0, {"corr_window": 30, "shift_lookback": 5}),
             (SentimentStrategy, "Sentiment", 1.5, {"threshold": 0.15, "lookback_hours": 24}),
+            (GradientBoostingStrategy, "GB", 2.0, {}),
             (DeepLearningStrategy, "DL", 1.5, {}),
         ]
 
@@ -185,12 +188,9 @@ class MoneyPrinterEngine:
         
         for cls, base_name, weight, params in strategy_defs:
             if base_name not in active_list:
-                # specific logging or just skip?
                 continue
                 
             for tf in timeframes:
-                # DL Strategy only runs on 15Min natively, but we register it for all.
-                # It handles resampling internally.
                 model = cls(ModelConfig(
                     name=f"{base_name}_{tf}",
                     weight=weight,
@@ -199,13 +199,48 @@ class MoneyPrinterEngine:
                 ))
                 
                 # Dependency Injection
-                if isinstance(model, SentimentStrategy):
-                    model.set_fetcher(data_fetcher)
-                elif isinstance(model, DeepLearningStrategy):
+                if hasattr(model, "set_fetcher"):
                     model.set_fetcher(data_fetcher)
                 
                 models.append(model)
         return models
+
+    def train_ml_models(self, symbols: list[str] = None):
+        """
+        Train all models that support the `train` method (e.g. GB, DL).
+        """
+        if symbols is None:
+            symbols = self.settings.strategy.default_symbols
+
+        console.rule("[bold yellow]Training ML Models")
+        
+        # Gather data
+        data_by_symbol = {}
+        for symbol in symbols:
+            # Need enough history for training
+            n_bars = 2000 # Good amount for ML
+            data = self.data_fetcher.get_latest_bars(symbol, n=n_bars, timeframe="1Min")
+            if not data.empty:
+                 # Enrich with Macro Data
+                 data = self.data_loader.merge_macro_data(data)
+                 data_by_symbol[symbol] = data
+                 
+        if not data_by_symbol:
+            console.print("  ⚠️  No data available for training.")
+            return
+
+        # Train Trainable Models
+        for model in self.democracy.models:
+            if hasattr(model, "train"):
+                # Filtering logic: if the model is a specific timeframe, does it need specific data?
+                # The GB model handles its own feature extraction from provided DFs.
+                # However, we have a list of DFs.
+                # Let's pass the dictionary of {symbol: df}
+                try:
+                    console.print(f"  🚂 Training {model.name}...")
+                    model.train(data_by_symbol)
+                except Exception as e:
+                    logger.error(f"Failed to train {model.name}: {e}")
 
     def learn_weights(self, symbols: list[str] = None) -> dict:
         """
@@ -216,6 +251,9 @@ class MoneyPrinterEngine:
             symbols = self.settings.strategy.default_symbols
 
         console.rule("[bold yellow]Step 0: Adaptive Weight Learning")
+
+        # 0.5: Train Trainable Models (e.g. Deep Learning, Gradient Boosting)
+        self.train_ml_models(symbols)
 
         # Load previous weights for blending
         stored = load_weights()
@@ -254,29 +292,6 @@ class MoneyPrinterEngine:
         if not data_by_symbol:
             console.print("  ⚠️  No data available for weight learning — keeping current weights")
             return {}
-
-        # 0.5: Train Trainable Models (e.g. Deep Learning)
-        # This occurs BEFORE backtesting so that the backtest evaluates the freshly trained model.
-        for model in self.democracy.models:
-            if hasattr(model, "train"):
-                # Pass all 1Min data for training (DL model resamples internally)
-                # We need a flat map of symbol -> 1Min DataFrame for simplicity here,
-                # or pass the full nested structure. Let's pass nested conformant to dl_model.train expectation?
-                # Actually dl_model.train expects symbol -> df. Let's aggregate 1Min data.
-                
-                training_data = {}
-                for sym, tf_data in data_by_symbol.items():
-                    # Prefer 1Min for granular training
-                    if "1Min" in tf_data:
-                        training_data[sym] = tf_data["1Min"]
-                    elif "1Day" in tf_data:
-                        training_data[sym] = tf_data["1Day"]
-                
-                if training_data:
-                    try:
-                        model.train(training_data)
-                    except Exception as e:
-                        logger.error(f"Failed to train {model.name}: {e}")
 
         # Run weight learning (fresh scores)
         update = self.weight_learner.learn_weights(
@@ -486,6 +501,8 @@ class MoneyPrinterEngine:
         console.print(f"  🗳️  {len(self.democracy.models)} models voting ({len(timeframes)} timeframes)")
         
         decisions = {}
+        latest_prices = {}
+        
         for symbol in symbols:
             console.print(f"\n[bold]{symbol}[/bold]")
 
@@ -501,25 +518,71 @@ class MoneyPrinterEngine:
             if not data_by_tf:
                 console.print(f"  ⚠️  No data available for {symbol}")
                 continue
-                
+            
+            # Capture latest price for sizing
+            if "1Min" in data_by_tf and not data_by_tf["1Min"].empty:
+                 latest_prices[symbol] = data_by_tf["1Min"]["close"].iloc[-1]
+            elif "1Day" in data_by_tf and not data_by_tf["1Day"].empty:
+                 latest_prices[symbol] = data_by_tf["1Day"]["close"].iloc[-1]
+            else:
+                 latest_prices[symbol] = 0.0
+
             # 2a. Detect Market Regime (using default 1Day data)
             regime = MarketRegime.UNKNOWN
             if "1Day" in data_by_tf:
                 regime = self.regime_detector.detect_regime(data_by_tf["1Day"])
             elif "1Min" in data_by_tf:
-                # Fallback to resampled 1Min -> 1Day if needed, but for now just use what we have? 
-                # Ideally regime detection is on Daily scale. 
-                # Let's stick to 1Day requirement for regime.
-                pass
+                regime = MarketRegime.SIDEWAYS_LOW_VOL
             
-            console.print(f"  🌊 Regime: [bold cyan]{regime.value}[/bold]")
+            # Display regime using Text to avoid markup errors with emoji
+            regime_text = Text()
+            regime_text.append("  🌊 Regime: ")
+            regime_text.append(str(regime.value), style="bold cyan")
+            console.print(regime_text)
 
-            consensus = self.democracy.vote_multi_tf(symbol, data_by_tf, regime=regime)
+            # 🛑 Hard Stop Loss Check 🛑
+            # If position is down > 2%, force exit immediately (bypass voting)
+            position = self.broker.get_position(symbol)
+            force_exit = False
+            
+            if position:
+                try:
+                    unrealized_plpct = float(position.unrealized_plpc)
+                    if unrealized_plpct < -0.02:
+                         console.print(f"  🛑 Stop Loss Triggered: P&L {unrealized_plpct:.2%} < -2.0%")
+                         force_exit = True
+                except (AttributeError, ValueError):
+                    pass
+            
+            if force_exit:
+                from models.market import ConsensusSignal, Signal, SignalType, Vote
+                # Create a synthetic SELL/COVER signal
+                # Determine side based on position
+                pos_qty = float(position.qty)
+                signal_type = SignalType.SELL if pos_qty > 0 else SignalType.BUY
+                
+                consensus = ConsensusSignal(
+                    signal_type=signal_type,
+                    confidence=1.0, # Max confidence to ensure close
+                    symbol=symbol,
+                    votes=[],
+                )
+                console.print(f"  → Stop Loss Override: {signal_type.value}")
+            else:
+                consensus = self.democracy.vote_multi_tf(symbol, data_by_tf, regime=regime)
+            
             decisions[symbol] = consensus
-            console.print(f"  → {consensus}")
+            if not force_exit:
+                 console.print(f"  → {consensus}")
 
         # Step 3: Execute trades
         console.rule("[yellow]Step 3: Trade Execution")
+        
+        # Fetch Account Equity for Sizing
+        account = self.broker.get_account()
+        equity = float(account.get("equity", 0.0))
+        console.print(f"  💰 Account Equity: ${equity:,.2f}")
+        
         trades = {}
         for symbol, consensus in decisions.items():
             if consensus.signal_type == SignalType.HOLD:
@@ -550,8 +613,19 @@ class MoneyPrinterEngine:
                     console.print(f"  {symbol}: BUY signal but already holding long — skipping")
                     continue
 
-            # Execute
+            # Execute - Dynamic Sizing
+            # Qty = (Equity * MaxPositionPct * Confidence) / Price
+            price = latest_prices.get(symbol, 0.0)
             qty = self.settings.trading.default_qty
+            
+            if equity > 0 and price > 0:
+                max_pos_value = equity * self.settings.trading.max_position_pct
+                target_value = max_pos_value * consensus.confidence
+                calc_qty = int(target_value / price)
+                qty = max(1, calc_qty) # Ensure at least 1 share
+                
+                console.print(f"  ⚖️  Dynamic Sizing: ${target_value:,.2f} ({consensus.confidence:.0%} conf) -> {qty} shares")
+
             trade = self.broker.submit_order(symbol, side, qty)
             trade.consensus = consensus
             self.storage.save_trade(trade)
