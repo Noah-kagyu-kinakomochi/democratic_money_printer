@@ -12,7 +12,9 @@ __pycache__/
 *.pyo
 
 # Local Data and Logs
-data/
+data/*.parquet
+data/*.pth
+data/*.pkl
 db/
 data_store/
 dataset/
