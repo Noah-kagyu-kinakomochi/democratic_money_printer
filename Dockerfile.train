@@ -1,0 +1,36 @@
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Extract the google-cloud dependencies from requirements.txt
+RUN grep "google-cloud" requirements.txt > deps.txt && \
+    pip install --no-cache-dir -r deps.txt
+
+# Install specific training dependencies
+COPY training_bundle/requirements_train.txt .
+RUN pip install --no-cache-dir -r requirements_train.txt
+
+# Copy application source
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p data db data_store/parquet logs results training_bundle
+
+# We must run as root in this specific container to ensure permission
+# to write to mounted volumes if necessary, though good practice is appuser.
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Default to running the PyTorch training script
+ENTRYPOINT ["python", "training_bundle/train.py"]
+CMD ["--data", "training_bundle/data.parquet", "--output", "results"]
