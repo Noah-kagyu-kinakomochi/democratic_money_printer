@@ -84,11 +84,11 @@ jobs:
             mkdir -p training_bundle
             gsutil cp gs://${{ env.BUCKET_NAME }}/datasets/data.parquet training_bundle/data.parquet
             
-            # Install any additional dependencies if a requirements file exists
-            if [ -f training_bundle/requirements_train.txt ]; then pip install -r training_bundle/requirements_train.txt; fi
+            # Install any additional dependencies if a requirements file exists (bypass PEP 668 for ephemeral VM)
+            if [ -f training_bundle/requirements_train.txt ]; then pip3 install --break-system-packages -r training_bundle/requirements_train.txt; fi
             
-            # Run the training script (default points to local data.parquet)
-            python ${{ env.TRAINING_SCRIPT }}
+            # Run the training script explicitly with python3
+            python3 ${{ env.TRAINING_SCRIPT }}
           "
 
       - name: Upload .pt Artifact to GCS Bucket
