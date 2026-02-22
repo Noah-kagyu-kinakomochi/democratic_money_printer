@@ -30,7 +30,7 @@ from data.data_fetcher import DataFetcher
 from data.ingestion import DataIngestionService
 from data.sources.alpaca_source import AlpacaDataSource
 from data.sources.alpha_vantage import AlphaVantageSource
-from models.market import OrderSide, SignalType
+from models.market import OrderSide, SignalType, ConsensusSignal, Signal, Vote
 from storage.base import StorageAdapter
 from storage.sqlite_store import SqliteStore
 from storage.parquet_store import ParquetStore
@@ -555,7 +555,6 @@ class MoneyPrinterEngine:
                     pass
             
             if force_exit:
-                from models.market import ConsensusSignal, Signal, SignalType, Vote
                 # Create a synthetic SELL/COVER signal
                 # Determine side based on position
                 pos_qty = float(position.qty)
