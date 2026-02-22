@@ -57,9 +57,9 @@ class StrategyConfig:
     min_model_weight: float = 0.01  # Skip models with weight below this to save compute
 
     # Active models (can be set via ACTIVE_MODELS env var)
-    #in active : DL
+    # The system now concentrates all resources exclusively on the Deep Learning Transformer
     active_models: list[str] = field(default_factory=lambda: [
-        m.strip() for m in _env("ACTIVE_MODELS", "MA,CorrRegime,Sentiment,GB,MACD").split(",") if m.strip()
+        m.strip() for m in _env("ACTIVE_MODELS", "DL").split(",") if m.strip()
     ])
 
 

@@ -53,7 +53,7 @@ jobs:
             --command "python" \
             --args "main.py,run" \
             --service-account ${{ env.SERVICE_ACCOUNT }} \
-            --memory 512Mi \
+            --memory 2048Mi \
             --cpu 1 \
             --max-retries 0 \
             --task-timeout 5m
@@ -98,7 +98,7 @@ jobs:
             --command "python" \
             --args "main.py,simulate" \
             --service-account ${{ env.SERVICE_ACCOUNT }} \
-            --memory 2048Mi \
+            --memory 4096Mi \
             --cpu 2 \
             --max-retries 0 \
             --task-timeout 60m
