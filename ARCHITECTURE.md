@@ -77,3 +77,20 @@ The primary entry point is `main.py`. Here are the most critical commands:
 ## Summary of the Cloud-Local Split
 - `training_bundle/train.py` = **Cloud (GCP/GPU)**
 - `main.py run` (and everything in `strategy/`) = **Local/Serverless** 
+
+## Transformer Architecture (Deep Learning System)
+The original LSTM model has been fully upgraded to a **Time-Series TransformerEncoder** (`pytorch-2-7`). 
+
+### Why Transformer over LSTM or ResNet?
+Unlike ResNet (built primarily for static spatial mapping like images), Transformers use **Multi-Head Self-Attention** to weigh the importance of variables *across time*. This means the model natively learns "Which previous 15-minute timeframe is most predictive of *this exact moment's* price action?" without being suffocated by sequential vanishing gradients (the primary flaw of LSTMs on noisy financial data).
+
+### Features (The 8 Inputs)
+We feed the Transformer a rolling sequence (`seq_len=10`) of 8 distinct normalized features per timestamp:
+1. **Target Log Return:** $\ln(\text{Close}_t / \text{Close}_{t-1})$
+2. **Volume:** Raw trading volume for the asset.
+3. **Sentiment Score:** The FinBERT NLP sentiment extraction for the asset.
+4. **VIX Level:** The raw CBOE Volatility Index (Fear indicator).
+5. **SP500 Return:** The $\ln$ return of the broader stock market index.
+6. **BTC Return:** The $\ln$ return of Bitcoin (Crypto/Risk-on indicator).
+7. **XLK Return:** The $\ln$ return of the Technology Sector.
+8. **XLF Return:** The $\ln$ return of the Financial Sector.
