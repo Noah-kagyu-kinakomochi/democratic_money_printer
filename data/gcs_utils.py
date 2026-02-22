@@ -83,5 +83,28 @@ class GCSManager:
             logger.info("✅ Download complete.")
             return True
         except Exception as e:
-            logger.error(f"GCS Download failed: {e}")
+            logger.error(f"❌ Failed to download {gcs_path}: {e}")
             return False
+
+def get_secret(secret_id: str, project_id: str = None) -> str:
+    """
+    Fetch a secret from Google Cloud Secret Manager.
+    Returns None if missing or if credentials fail.
+    """
+    try:
+        from google.cloud import secretmanager
+    except ImportError:
+        logger.warning(f"google-cloud-secret-manager not installed. Cannot fetch {secret_id}.")
+        return None
+
+    if not project_id:
+        return None
+        
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        logger.debug(f"Could not fetch secret {secret_id} from GCP: {e}")
+        return None

@@ -113,7 +113,7 @@ def main():
 
                 regime = engine.regime_detector.detect_regime(data_day)
                 console.print(f"\n[bold]{symbol}[/bold]")
-                console.print(f"  🌊 Regime: [bold cyan]{regime.value}[/bold]")
+                console.print(f"  🌊 Regime: [bold cyan]{regime.value}[/bold cyan]")
                 
                 consensus = engine.democracy.vote(symbol, data_day, regime=regime)
                 console.print(f"  → {consensus}")

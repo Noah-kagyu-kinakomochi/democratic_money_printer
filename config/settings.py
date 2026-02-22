@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from dotenv import load_dotenv
 
+from data.gcs_utils import get_secret
+
 # Load .env from project root (override=False means OS env vars take priority)
 _PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
@@ -112,19 +114,35 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    """Load settings from environment variables."""
-    trading_mode = _env("TRADING_MODE", "paper")
+    """Load settings from .env and fallback to GCP Secret Manager."""
+    load_dotenv()
 
-    if trading_mode == "live":
+    def _env(key: str, default: str = "") -> str:
+        return os.environ.get(key, default)
+
+    gcp_project = _env("GOOGLE_CLOUD_PROJECT", "moneyprinter-prod") # Fallback to prod project
+
+    # Determine Alpaca credentials, falling back to Secret Manager if missing
+    alpaca_api_key = _env("ALPACA_API_KEY")
+    if not alpaca_api_key:
+        alpaca_api_key = get_secret("ALPACA_API_KEY", gcp_project) or ""
+        
+    alpaca_secret_key = _env("ALPACA_SECRET_KEY")
+    if not alpaca_secret_key:
+        alpaca_secret_key = get_secret("ALPACA_SECRET_KEY", gcp_project) or ""
+
+    trading_mode_str = _env("TRADING_MODE", "paper").lower()
+
+    if trading_mode_str == "live":
         alpaca_base_url = "https://api.alpaca.markets"
     else:
         alpaca_base_url = "https://paper-api.alpaca.markets"
 
     return Settings(
         alpaca=AlpacaConfig(
-            api_key=_env("ALPACA_API_KEY"),
-            secret_key=_env("ALPACA_SECRET_KEY"),
-            base_url=alpaca_base_url,
+            api_key=alpaca_api_key,
+            secret_key=alpaca_secret_key,
+            base_url="https://paper-api.alpaca.markets" if trading_mode_str == "paper" else "https://api.alpaca.markets"
         ),
         alphavantage=AlphaVantageConfig(
             api_key=_env("ALPHAVANTAGE_KEY"),
@@ -138,7 +156,7 @@ def load_settings() -> Settings:
         ),
         strategy=StrategyConfig(),
         trading=TradingConfig(
-            mode=trading_mode,
+            mode=trading_mode_str,
             does_short=_env("DOES_SHORT", "true").lower() == "true",
         ),
         regime=RegimeConfig(),
