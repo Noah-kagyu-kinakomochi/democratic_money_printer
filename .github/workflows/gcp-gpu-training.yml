@@ -32,9 +32,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          # Use Workload Identity Federation (recommended) or Service Account JSON key
-          workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider
-          service_account: my-service-account@your-gcp-project-id.iam.gserviceaccount.com
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -96,7 +95,9 @@ jobs:
         run: |
           # Using gsutil to copy the model artifacts (.pt files) directly to your GCS bucket
           gcloud compute ssh ${{ env.INSTANCE_NAME }} --zone=${{ env.ZONE }} --command="
-            gsutil cp ${MODEL_OUTPUT_DIR}/*.pt gs://${{ env.BUCKET_NAME }}/models/run-${{ github.sha }}/
+            gsutil -m cp ~/workspace/output/*.pth gs://${{ env.BUCKET_NAME }}/${{ env.GCS_MODEL_DIR }}/
+            gsutil -m cp ~/workspace/output/*.pkl gs://${{ env.BUCKET_NAME }}/${{ env.GCS_MODEL_DIR }}/
+            echo 'Model artifacts uploaded to gs://${{ env.BUCKET_NAME }}/${{ env.GCS_MODEL_DIR }}/'
           "
 
       - name: Destroy Ephemeral Instance
