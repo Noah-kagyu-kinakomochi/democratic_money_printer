@@ -1,0 +1,42 @@
+.git
+.gitignore
+.env
+.DS_Store
+
+# Virtual Environments
+venv/
+env/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local Data and Logs
+data/
+db/
+data_store/
+dataset/
+logs/
+*.db
+*.sqlite
+
+# Testing / Build Artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# IDEs
+.idea/
+.vscode/
+
+# GitHub Actions
+.github/
+
+# Terraform (if added later)
+.terraform/
+*.tfstate
+*.tfstate.backup
