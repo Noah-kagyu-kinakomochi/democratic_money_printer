@@ -1,0 +1,129 @@
+name: Deploy MoneyPrinter Jobs
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: moneyprinter-prod
+  REGION: us-central1
+  REPO_NAME: moneyprinter-repo
+  SERVICE_ACCOUNT: moneyprinter-trainer@moneyprinter-prod.iam.gserviceaccount.com
+
+jobs:
+  deploy-jobs:
+    name: Build & Deploy Cloud Run Jobs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: 'projects/827371841137/locations/global/workloadIdentityPools/github/providers/my-repo'
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker Authentication
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      # ==========================================
+      # BUILD AND DEPLOY: RUN JOB (Live CPU)
+      # ==========================================
+      - name: Build and Push Run Image
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-run:latest
+          docker build -t $IMAGE_URL -f Dockerfile .
+          docker push $IMAGE_URL
+
+      - name: Deploy Run Job
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-run:latest
+          gcloud run jobs deploy moneyprinter-run-job \
+            --image $IMAGE_URL \
+            --region ${{ env.REGION }} \
+            --command "python" \
+            --args "main.py,run" \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --memory 512Mi \
+            --cpu 1 \
+            --max-retries 0 \
+            --task-timeout 5m
+
+      - name: Ensure Run Cloud Scheduler Trigger
+        run: |
+          CRON_SCHEDULE="0,15,30,45 * * * *"
+          SCHEDULER_NAME="moneyprinter-run-job-trigger"
+
+          if gcloud scheduler jobs describe $SCHEDULER_NAME --location=${{ env.REGION }} >/dev/null 2>&1; then
+              gcloud scheduler jobs update http $SCHEDULER_NAME \
+                  --location=${{ env.REGION }} \
+                  --schedule="$CRON_SCHEDULE" \
+                  --uri="https://${{ env.REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ env.PROJECT_ID }}/jobs/moneyprinter-run-job:run" \
+                  --http-method=POST \
+                  --oauth-service-account-email=${{ env.SERVICE_ACCOUNT }}
+          else
+              gcloud scheduler jobs create http $SCHEDULER_NAME \
+                  --location=${{ env.REGION }} \
+                  --schedule="$CRON_SCHEDULE" \
+                  --time-zone="America/New_York" \
+                  --uri="https://${{ env.REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ env.PROJECT_ID }}/jobs/moneyprinter-run-job:run" \
+                  --http-method=POST \
+                  --oauth-service-account-email=${{ env.SERVICE_ACCOUNT }}
+          fi
+
+      # ==========================================
+      # BUILD AND DEPLOY: SIMULATE JOB (CPU High-Mem)
+      # ==========================================
+      - name: Build and Push Simulate Image
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-simulate:latest
+          docker build -t $IMAGE_URL -f Dockerfile .
+          docker push $IMAGE_URL
+
+      - name: Deploy Simulate Job
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-simulate:latest
+          gcloud run jobs deploy moneyprinter-simulate-job \
+            --image $IMAGE_URL \
+            --region ${{ env.REGION }} \
+            --command "python" \
+            --args "main.py,simulate" \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --memory 2048Mi \
+            --cpu 2 \
+            --max-retries 0 \
+            --task-timeout 60m
+
+      # ==========================================
+      # BUILD AND DEPLOY: TRAIN JOB (GPU Cloud Run)
+      # ==========================================
+      - name: Build and Push Train Image
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-train:latest
+          docker build -t $IMAGE_URL -f Dockerfile.train .
+          docker push $IMAGE_URL
+
+      - name: Deploy Train Job
+        run: |
+          IMAGE_URL=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/moneyprinter-train:latest
+          gcloud run jobs deploy moneyprinter-train-job \
+            --image $IMAGE_URL \
+            --region ${{ env.REGION }} \
+            --command "bash" \
+            --args "-c,gsutil cp gs://moneyprinter-artifacts-prod/datasets/data.parquet data.parquet && python main.py package && python training_bundle/train.py --data data.parquet --output results && gsutil cp results/best_model.pth gs://moneyprinter-artifacts-prod/models/best_model.pth && gsutil cp results/scaler.pkl gs://moneyprinter-artifacts-prod/models/scaler.pkl" \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --memory 8Gi \
+            --cpu 4 \
+            --max-retries 0 \
+            --task-timeout 60m \
+            --set-env-vars="NVIDIA_VISIBLE_DEVICES=all"
