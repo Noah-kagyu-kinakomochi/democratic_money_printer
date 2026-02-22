@@ -3,6 +3,9 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
+# Ensure Python can resolve internal module imports natively 
+ENV PYTHONPATH=/app
+
 # Install system dependencies (needed for compiling some Python packages)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
